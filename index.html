@@ -83,6 +83,52 @@
             }
         }
 
+        // Admin/login settings
+        const ADMIN_USER = 'ADMINISTRATOR';
+        const ADMIN_PASS = 'OpenZ8-Key-Administration';
+        let isAdmin = false;
+
+        function checkAdminAccess() {
+            try {
+                isAdmin = sessionStorage.getItem('isAdmin') === '1';
+            } catch (e) {
+                isAdmin = false;
+            }
+            const wrapper = document.getElementById('cloudSettingsWrapper');
+            const authButton = document.getElementById('authButton');
+            if (wrapper) wrapper.style.display = isAdmin ? 'inline-block' : 'none';
+            if (authButton) authButton.textContent = isAdmin ? 'Logout' : 'Admin Login';
+            updateStorageBadge();
+        }
+
+        function openLoginModal() { document.getElementById('loginModal').classList.remove('hidden'); }
+        function closeLoginModal() { document.getElementById('loginModal').classList.add('hidden'); }
+
+        function attemptLogin() {
+            const user = document.getElementById('loginUser').value || '';
+            const pass = document.getElementById('loginPass').value || '';
+            const msg = document.getElementById('loginMessage');
+            if (user === ADMIN_USER && pass === ADMIN_PASS) {
+                try { sessionStorage.setItem('isAdmin', '1'); } catch (e) { /* ignore */ }
+                isAdmin = true;
+                msg.textContent = 'Logged in as ADMIN.';
+                setTimeout(() => { msg.textContent = ''; closeLoginModal(); checkAdminAccess(); }, 800);
+            } else {
+                msg.textContent = 'Invalid credentials.';
+            }
+        }
+
+        function authButtonClicked() {
+            if (isAdmin) {
+                // logout
+                try { sessionStorage.removeItem('isAdmin'); } catch (e) {}
+                isAdmin = false;
+                checkAdminAccess();
+            } else {
+                openLoginModal();
+            }
+        }
+
         // If firebaseConfig was provided at page load, initialize now
         if (firebaseConfig) {
             initializeFirebaseRuntime(firebaseConfig, initialAuthToken);
@@ -768,6 +814,9 @@
         // --- Initialization ---
         document.addEventListener('DOMContentLoaded', () => {
             switchTab('dataAnalyzer'); 
+            // Ensure admin UI state is correct
+            checkAdminAccess();
+            updateStorageBadge();
         });
 
     </script>
@@ -779,7 +828,10 @@
         </header>
         <div class="text-center mb-4">
             <span id="storageModeBadge" class="ml-2 inline-block px-2 py-1 text-xs font-semibold text-white bg-yellow-600 rounded-full">Local</span>
-            <button onclick="openCloudSettings()" class="ml-4 px-2 py-1 text-xs font-semibold text-gray-900 bg-indigo-300 rounded">Cloud Settings</button>
+            <button id="authButton" onclick="authButtonClicked()" class="ml-4 px-2 py-1 text-xs font-semibold text-gray-900 bg-indigo-300 rounded">Admin Login</button>
+            <span id="cloudSettingsWrapper" style="display:none">
+                <button onclick="openCloudSettings()" class="ml-4 px-2 py-1 text-xs font-semibold text-gray-900 bg-indigo-300 rounded">Cloud Settings</button>
+            </span>
         </div>
 
         <!-- Tab Navigation -->
@@ -893,6 +945,20 @@
                 <button onclick="migrateLocalToCloud()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg">Migrate Local → Cloud</button>
             </div>
             <p id="cloudSettingsMessage" class="text-sm text-gray-300 mt-3"></p>
+        </div>
+    </div>
+
+    <!-- Admin Login Modal -->
+    <div id="loginModal" class="hidden fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50">
+        <div class="bg-gray-800 p-6 rounded-xl shadow-2xl w-full max-w-sm">
+            <h3 class="text-xl font-bold text-indigo-300 mb-4">Administrator Login</h3>
+            <input id="loginUser" placeholder="Username" class="w-full bg-gray-700 text-gray-200 p-3 rounded mb-3" />
+            <input id="loginPass" type="password" placeholder="Password" class="w-full bg-gray-700 text-gray-200 p-3 rounded mb-3" />
+            <div class="flex justify-end space-x-3">
+                <button onclick="closeLoginModal()" class="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white font-semibold rounded-lg">Cancel</button>
+                <button onclick="attemptLogin()" class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg">Login</button>
+            </div>
+            <p id="loginMessage" class="text-sm text-gray-300 mt-3"></p>
         </div>
     </div>
     
