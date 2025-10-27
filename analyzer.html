@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rally Data Analyzer</title>
+    <!-- Load Tailwind CSS --><script src="https://cdn.tailwindcss.com"></script>
+    <!-- Use Inter font --><style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .tab-active {
+            border-color: #4f46e5; /* indigo-600 */
+            color: #e5e7eb; /* gray-200 */
+        }
+        .tab-inactive {
+            border-color: transparent;
+            color: #9ca3af; /* gray-400 */
+        }
+        /* Style for the editable inputs in the table */
+        .rally-count-input {
+            background-color: transparent;
+            border: 1px solid #4b5563; /* gray-600 */
+            text-align: right;
+            padding: 4px 8px;
+            width: 80px;
+            border-radius: 4px;
+            color: #93c5fd; /* blue-300 */
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen p-4 sm:p-8">
+
+    <!-- Firebase setup and core logic -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, query, onSnapshot, doc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // --- GLOBAL VARIABLES FROM ENVIRONMENT ---
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        
+        let app, db, auth;
+        let userId = null;
+        let isAuthReady = false;
+
+        // Initialize Firebase
+        if (firebaseConfig) {
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                
+                // Handle Authentication
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                    } else if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken).catch(e => console.error("Firebase Custom Auth Error:", e));
+                        userId = auth.currentUser.uid;
+                    } else {
+                        await signInAnonymously(auth).catch(e => console.error("Firebase Anonymous Auth Error:", e));
+                        userId = auth.currentUser.uid; // Get the generated anonymous UID
+                    }
+                    isAuthReady = true;
+                    console.log("Firebase Auth Ready. User ID:", userId);
+                    loadRallyHistory(); // Start loading history once auth is complete
+                });
+
+            } catch (e) {
+                console.error("Firebase Initialization Error:", e);
+            }
+        } else {
+            console.warn("Firebase config not available. History feature will not function.");
+            isAuthReady = true; // Still allow local processing
+        }
+
+        // --- MASTER LIST DATA ---
+        const MASTER_LIST = [
+            { division: "Somalian Cove" }, { division: "Black Marine Corps" }, { division: "Marine Reserved Forces" },
+            { division: "Navy Seals" }, { division: "Air Support" }, { division: "Dragons" },
+            { division: "Attack Force" }, { division: "Neptune Raiders" }, { division: "Special Air Service Regiment" },
+            { division: "National Defence" }, { division: "Spearhead Command" }, { division: "Aviation Corps" },
+            { division: "Russian Air" }, { division: "Purple Legion" }, { division: "Visitors Division" },
+            { division: "First Air Force" }, { division: "United Nations Peacekeeping" }, { division: "Imperial Kazes" },
+            { division: "Orion's Sentinels" }, { division: "Stormy Waters" }, { division: "Royal Dutch Air Force" },
+            { division: "Naval Medical Corps" }, { division: "The Stormbreakers" }, { division: "Virendian Imperium" },
+            { division: "Spanish Naval Operatives" }, { division: "Coastline Marine Corps" }, { division: "Naval Vanguard" },
+            { division: "Sea Warriors Squadron" }, { division: "Intelligence Command" }, { division: "Elite Air Corporation" },
+            { division: "United States Navy" }, { division: "77th Naval Squadron" }, { division: "Phantom Corps" },
+            { division: "Aerial Command Echelon" }, { division: "Delta Force One" }, { division: "First Anti Air Defense" },
+            { division: "Eternal Abyssal Guardians" }, { division: "Lost Souls" }, { division: "Naval Special Operations Division" },
+            { division: "Titan Legion" }, { division: "The Sentry Guard" }, { division: "Swedish Amphibious Corps" },
+            { division: "Aerial Aggressor Squadron" }, { division: "Fish Legion" }, { division: "Royal Canadian Navy" },
+            { division: "Arctic Commandos" }, { division: "Aerospace Operations Force" }, { division: "Demolition Corps" },
+            { division: "Strategic Air Regiment" }, { division: "Alien Force" }, { division: "Royal British Air Force" },
+            { division: "Maritime Assault Division" },
+        ];
+        
+        // --- FIREBASE HISTORY LOGIC ---
+
+        /**
+         * Gets the Firestore collection path for the user's rally history.
+         * Path: /artifacts/{appId}/users/{userId}/rally_history
+         */
+        function getRallyCollection() {
+            if (!db || !userId) return null;
+            return collection(db, `artifacts/${appId}/users/${userId}/rally_history`);
+        }
+
+        // LocalStorage fallback key (used when Firebase is not configured)
+        function getLocalHistoryKey() {
+            return `rally_history_local_${appId}`;
+        }
+
+        /**
+         * Saves the processed data to Firestore.
+         */
+        async function saveRallyData(rawData, totalPasses, totalDivisions) {
+            // If Firestore is available and auth ready, save there.
+            if (isAuthReady && db) {
+                const rallyCollection = getRallyCollection();
+                if (!rallyCollection) {
+                    console.warn('Rally collection not available; skipping Firestore save.');
+                    return;
+                }
+                try {
+                    await addDoc(rallyCollection, {
+                        timestamp: new Date(),
+                        rawData: rawData,
+                        summary: {
+                            totalPasses: totalPasses,
+                            totalDivisions: totalDivisions,
+                        }
+                    });
+                    console.log("Rally data saved to Firestore successfully.");
+                } catch (e) {
+                    console.error("Error saving rally data to Firestore:", e);
+                }
+                return;
+            }
+
+            // LocalStorage fallback when Firestore isn't configured
+            try {
+                const key = getLocalHistoryKey();
+                const existing = JSON.parse(localStorage.getItem(key) || '[]');
+                const entry = {
+                    id: `local-${Date.now()}-${Math.floor(Math.random()*10000)}`,
+                    timestamp: Date.now(),
+                    rawData: rawData,
+                    summary: { totalPasses, totalDivisions }
+                };
+                existing.push(entry);
+                localStorage.setItem(key, JSON.stringify(existing));
+                console.log('Rally data saved to localStorage:', entry.id);
+                // Refresh the UI history if the history view is active
+                loadRallyHistory();
+            } catch (e) {
+                console.error('Error saving rally data to localStorage:', e);
+            }
+        }
+
+        /**
+         * Loads the rally history using a real-time listener (onSnapshot).
+         */
+        function loadRallyHistory() {
+            const historyList = document.getElementById('historyList');
+
+            // If Firestore is configured and auth ready, use real-time listener
+            if (isAuthReady && db) {
+                const rallyCollection = getRallyCollection();
+                if (!rallyCollection) {
+                    historyList.innerHTML = '<p class="text-yellow-400">Waiting for user authentication to load history...</p>';
+                    return;
+                }
+
+                const q = query(rallyCollection);
+                onSnapshot(q, (snapshot) => {
+                    let historyHTML = '';
+                    const documents = snapshot.docs.map(doc => ({ id: doc.id, data: doc.data() }));
+
+                    // Sort documents by timestamp descending (newest first)
+                    documents.sort((a, b) => {
+                        const timeA = a.data.timestamp && a.data.timestamp.toDate ? a.data.timestamp.toDate().getTime() : 0;
+                        const timeB = b.data.timestamp && b.data.timestamp.toDate ? b.data.timestamp.toDate().getTime() : 0;
+                        return timeB - timeA;
+                    });
+
+                    if (documents.length === 0) {
+                        historyHTML = '<p class="text-gray-400 text-center py-4">No previous rally data found. Process a rally to save history!</p>';
+                    } else {
+                        documents.forEach(({ id: docId, data }) => {
+                            const date = data.timestamp && data.timestamp.toDate ? data.timestamp.toDate().toLocaleString() : 'Date Unavailable';
+                            historyHTML += `
+                                <div id="rally-item-${docId}" class="bg-gray-700 p-4 rounded-lg flex justify-between items-center transition duration-200 hover:bg-gray-600 mb-2">
+                                    <div class="cursor-pointer" onclick="window.showRallyDetails('${docId}')">
+                                        <p class="font-bold text-lg text-indigo-300">${date}</p>
+                                        <p class="text-sm text-gray-400">Passed: ${data.summary.totalPasses} / ${data.summary.totalDivisions}</p>
+                                    </div>
+                                    <div class="flex space-x-2">
+                                        <button onclick="window.showRallyDetails('${docId}')" class="bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-semibold py-1 px-3 rounded-full">View</button>
+                                        <button onclick="window.confirmDelete('${docId}')" class="bg-red-500 hover:bg-red-600 text-white text-xs font-semibold py-1 px-3 rounded-full">Delete</button>
+                                    </div>
+                                </div>
+                            `;
+                            document.getElementById('rallyDataInput').setAttribute(`data-rally-${docId}`, data.rawData);
+                        });
+                    }
+                    historyList.innerHTML = historyHTML;
+                }, (error) => {
+                    console.error("Error loading rally history:", error);
+                    historyList.innerHTML = `<p class="text-red-400">Error loading history: ${error.message}</p>`;
+                });
+                return;
+            }
+
+            // LocalStorage fallback: load entries from localStorage
+            try {
+                const key = getLocalHistoryKey();
+                const items = JSON.parse(localStorage.getItem(key) || '[]');
+                if (!items || items.length === 0) {
+                    historyList.innerHTML = '<p class="text-gray-400 text-center py-4">No previous rally data found. Process a rally to save history!</p>';
+                    return;
+                }
+
+                // Sort newest first
+                items.sort((a, b) => b.timestamp - a.timestamp);
+
+                let historyHTML = '';
+                items.forEach(item => {
+                    const date = new Date(item.timestamp).toLocaleString();
+                    const docId = item.id;
+                    historyHTML += `
+                        <div id="rally-item-${docId}" class="bg-gray-700 p-4 rounded-lg flex justify-between items-center transition duration-200 hover:bg-gray-600 mb-2">
+                            <div class="cursor-pointer" onclick="window.showRallyDetails('${docId}')">
+                                <p class="font-bold text-lg text-indigo-300">${date}</p>
+                                <p class="text-sm text-gray-400">Passed: ${item.summary.totalPasses} / ${item.summary.totalDivisions}</p>
+                            </div>
+                            <div class="flex space-x-2">
+                                <button onclick="window.showRallyDetails('${docId}')" class="bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-semibold py-1 px-3 rounded-full">View</button>
+                                <button onclick="window.confirmDelete('${docId}')" class="bg-red-500 hover:bg-red-600 text-white text-xs font-semibold py-1 px-3 rounded-full">Delete</button>
+                            </div>
+                        </div>
+                    `;
+                    document.getElementById('rallyDataInput').setAttribute(`data-rally-${docId}`, item.rawData);
+                });
+                historyList.innerHTML = historyHTML;
+            } catch (e) {
+                console.error('Error loading local history:', e);
+                historyList.innerHTML = `<p class="text-red-400">Error loading local history.</p>`;
+            }
+        }
+        
+        /**
+         * Populates the main text area with data from a history entry and re-runs the report.
+         */
+        window.showRallyDetails = function(docId) {
+            const rawData = document.getElementById('rallyDataInput').getAttribute(`data-rally-${docId}`);
+            if (rawData) {
+                // 1. Load data and process
+                document.getElementById('rallyDataInput').value = rawData;
+                window.processInputData(true); // Re-run analysis, indicate it's from history
+                
+                // 2. Setup and show history indicator/back button
+                const historyItem = document.getElementById(`rally-item-${docId}`);
+                const dateText = historyItem ? historyItem.querySelector('.font-bold').textContent : 'A past rally.';
+                document.getElementById('historyLoadText').textContent = `Currently viewing rally from: ${dateText}`;
+                document.getElementById('historyLoadIndicator').classList.remove('hidden');
+
+                // 3. Switch to Report View
+                switchTab('dataAnalyzer');
+            }
+        }
+
+        /**
+         * Shows a custom modal for delete confirmation.
+         */
+        window.confirmDelete = function(docId) {
+            const modal = document.getElementById('confirmModal');
+            document.getElementById('confirmDeleteButton').onclick = () => { 
+                deleteRallyData(docId);
+                modal.classList.add('hidden');
+            };
+            modal.classList.remove('hidden');
+        }
+
+        /**
+         * Deletes a record from Firestore.
+         */
+        async function deleteRallyData(docId) {
+            // If Firestore available, delete from there
+            if (isAuthReady && db) {
+                const rallyCollection = getRallyCollection();
+                if (!rallyCollection) return;
+                try {
+                    await deleteDoc(doc(rallyCollection, docId));
+                    console.log("Rally data deleted successfully:", docId);
+                    // UI will update via onSnapshot
+                    return;
+                } catch (e) {
+                    console.error("Error deleting rally data:", e);
+                    const historyList = document.getElementById('historyList');
+                    historyList.innerHTML += `<p class="text-red-400">Failed to delete ${docId}.</p>`;
+                    return;
+                }
+            }
+
+            // Otherwise delete from localStorage
+            try {
+                const key = getLocalHistoryKey();
+                const items = JSON.parse(localStorage.getItem(key) || '[]');
+                const filtered = items.filter(i => i.id !== docId);
+                localStorage.setItem(key, JSON.stringify(filtered));
+                console.log('Deleted local history item', docId);
+                loadRallyHistory();
+            } catch (e) {
+                console.error('Error deleting local history item:', e);
+                const historyList = document.getElementById('historyList');
+                historyList.innerHTML += `<p class="text-red-400">Failed to delete ${docId}.</p>`;
+            }
+        }
+
+        // --- CORE UI/APP LOGIC ---
+        
+        /**
+         * Helper function to determine pass status (count >= 5).
+         */
+        function getPassStatus(count) {
+            return count >= 5 ? { status: 'Yes', color: 'text-green-400 font-bold' } : { status: 'No', color: 'text-red-400' };
+        }
+
+        /**
+         * Handles in-table editing by recalculating the pass status and overall summary.
+         */
+        window.updatePassStatus = function(inputElement, divisionName) {
+            const newCount = parseInt(inputElement.value, 10) || 0;
+            const row = inputElement.closest('tr');
+            const statusCell = row.querySelector('.pass-status-cell');
+            
+            const { status, color } = getPassStatus(newCount);
+            
+            statusCell.textContent = status;
+            statusCell.className = `p-3 text-center pass-status-cell ${color}`;
+
+            const rowColor = status === 'Yes' ? 'bg-gray-700 hover:bg-gray-600' : 'bg-gray-700/50 hover:bg-gray-700/80';
+            row.className = rowColor;
+            
+            // Recalculate and update the overall summary
+            updateSummaryDisplay();
+        }
+
+        /**
+         * Recalculates and updates the summary displayed in the report header.
+         */
+        function updateSummaryDisplay() {
+            const table = document.getElementById('resultsTable');
+            if (!table || table.querySelector('tbody').children.length === 0) return;
+
+            let totalPasses = 0;
+            const totalDivisions = MASTER_LIST.length;
+            
+            table.querySelectorAll('tbody tr').forEach(row => {
+                const countInput = row.querySelector('.rally-count-input');
+                const count = parseInt(countInput.value, 10) || 0;
+                if (count >= 5) {
+                    totalPasses++;
+                }
+            });
+
+            const statusMessage = document.getElementById('statusMessage');
+            statusMessage.innerHTML = `✅ Currently viewing report for ${totalDivisions} divisions. **${totalPasses}** divisions passed the rally requirement.`;
+            statusMessage.classList.add('text-green-400');
+        }
+
+        /**
+         * Switches the active tab and updates button styling.
+         */
+        window.switchTab = function(tabId) {
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.add('hidden');
+            });
+            document.getElementById(tabId).classList.remove('hidden');
+
+            document.querySelectorAll('[id^="tab-"]').forEach(button => {
+                button.classList.remove('tab-active');
+                button.classList.add('tab-inactive');
+            });
+
+            document.getElementById(`tab-${tabId}`).classList.remove('tab-inactive');
+            document.getElementById(`tab-${tabId}`).classList.add('tab-active');
+            
+            // Manage visibility within the dataAnalyzer tab
+            const rallyInputView = document.getElementById('rallyInputView');
+            const rallyReportView = document.getElementById('rallyReportView');
+
+            if (tabId === 'historyViewer') {
+                rallyReportView.classList.add('hidden');
+                rallyInputView.classList.add('hidden');
+                loadRallyHistory(); // Ensure data is loaded
+            } else if (tabId === 'dataAnalyzer') {
+                // If switching to analyzer, show the report if one exists, otherwise show the input box
+                const isReportVisible = rallyReportView.classList.contains('hidden') === false;
+                if (isReportVisible || document.getElementById('resultsTable').querySelector('tbody')?.children.length > 0) {
+                    rallyInputView.classList.add('hidden');
+                    rallyReportView.classList.remove('hidden');
+                } else {
+                    rallyInputView.classList.remove('hidden');
+                    rallyReportView.classList.add('hidden');
+                    document.getElementById('historyLoadIndicator').classList.add('hidden');
+                }
+            }
+        }
+
+        /**
+         * Parses the raw text data and consolidates the highest actual rally count for each division.
+         */
+        function parseRallyData(rawData) {
+            const highestRallyCounts = new Map();
+            // Regex to match lines like "Division Name (Count)" or "Division Name (X-Y)"
+            const RALLY_LINE_RE = /^\s*(.+?)\s+\((.+?)\)$/gm;
+            
+            let match;
+            while ((match = RALLY_LINE_RE.exec(rawData)) !== null) {
+                const rawDivisionName = match[1].trim();
+                const countString = match[2].trim();
+                
+                let actualCount;
+                if (countString.includes('-')) {
+                    // Handles "X-Y" format, taking Y as the actual count
+                    const parts = countString.split('-');
+                    actualCount = parseInt(parts[1].trim(), 10);
+                } else {
+                    // Handles single count format
+                    actualCount = parseInt(countString.trim(), 10);
+                }
+
+                if (!isNaN(actualCount)) {
+                    // Use the max count encountered for this division
+                    const currentMax = highestRallyCounts.get(rawDivisionName) || 0;
+                    highestRallyCounts.set(rawDivisionName, Math.max(currentMax, actualCount));
+                }
+            }
+            return highestRallyCounts;
+        }
+
+        /**
+         * Merges the master list with the consolidated rally counts and renders the editable table.
+         * Returns initial summary data: { totalPasses, totalDivisions }.
+         */
+        function generateTable(consolidatedData) {
+            const table = document.getElementById('resultsTable');
+            let tableHTML = '';
+
+            // --- Table Header ---
+            tableHTML += `
+                <thead>
+                    <tr class="bg-indigo-600 text-left text-sm font-semibold uppercase tracking-wider">
+                        <th class="p-3">Division</th>
+                        <th class="p-3 text-right">Highest Rally Count</th>
+                        <th class="p-3 text-center">Passed Rally? (>= 5)</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-700">
+            `;
+
+            // --- Table Body ---
+            let totalPasses = 0;
+            let totalDivisions = 0;
+
+            MASTER_LIST.forEach(item => {
+                totalDivisions++;
+                let count = 0;
+
+                // 1. Try exact match
+                if (consolidatedData.has(item.division)) {
+                    count = consolidatedData.get(item.division);
+                } else {
+                    // 2. Try partial match/fuzzy logic (for user misspellings/shortcuts)
+                    for (const [key, value] of consolidatedData.entries()) {
+                        if (key.toLowerCase().includes(item.division.toLowerCase()) || item.division.toLowerCase().includes(key.toLowerCase())) {
+                            count = Math.max(count, value);
+                        }
+                    }
+                }
+                
+                const { status: passedRally, color: passColor } = getPassStatus(count);
+                const countDisplay = count;
+                const rowColor = passedRally === 'Yes' ? 'bg-gray-700 hover:bg-gray-600' : 'bg-gray-700/50 hover:bg-gray-700/80';
+                
+                if (passedRally === 'Yes') { totalPasses++; }
+
+                tableHTML += `
+                    <tr class="${rowColor}">
+                        <td class="p-3 font-medium text-gray-100 division-name">${item.division}</td>
+                        <td class="p-3 text-right font-mono">
+                            <input type="number" 
+                                class="rally-count-input"
+                                value="${countDisplay}" 
+                                min="0" 
+                                oninput="window.updatePassStatus(this, '${item.division}')">
+                        </td>
+                        <td class="p-3 text-center pass-status-cell ${passColor}">${passedRally}</td>
+                    </tr>
+                `;
+            });
+
+            tableHTML += '</tbody>';
+            table.innerHTML = tableHTML;
+            
+            return { totalPasses, totalDivisions };
+        }
+
+        /**
+         * Saves the current data in the *editable table* as a new rally history entry.
+         */
+        window.saveEditedReport = function() {
+            const table = document.getElementById('resultsTable');
+            const rows = table.querySelectorAll('tbody tr');
+            
+            if (rows.length === 0) {
+                // Use the custom modal to show an error, as alert() is forbidden
+                showCustomMessage('Error', 'Cannot save an empty report.', 'bg-red-500');
+                return;
+            }
+
+            let rawData = [];
+            let totalPasses = 0;
+            const totalDivisions = rows.length;
+
+            rows.forEach(row => {
+                const divisionName = row.querySelector('.division-name').textContent;
+                const count = parseInt(row.querySelector('.rally-count-input').value, 10) || 0;
+                
+                // Convert table data back to the original text format for saving
+                rawData.push(`${divisionName} (${count})`);
+
+                if (count >= 5) {
+                    totalPasses++;
+                }
+            });
+            
+            // Join data for saving
+            const rawDataString = rawData.join('\n');
+            
+            const statusMessage = document.getElementById('statusMessage');
+            // Always attempt to save; saveRallyData will use Firestore when available
+            saveRallyData(rawDataString, totalPasses, totalDivisions);
+
+            // Give clear feedback to the user depending on configured backend
+            if (isAuthReady && db) {
+                statusMessage.innerHTML = `🎉 Successfully saved edited report to cloud! **${totalPasses}** divisions passed.`;
+                statusMessage.classList.remove('text-yellow-500');
+                statusMessage.classList.add('text-green-400');
+            } else {
+                statusMessage.innerHTML = `💾 Saved locally (no cloud configured). **${totalPasses}** divisions passed.`;
+                statusMessage.classList.remove('text-green-400');
+                statusMessage.classList.add('text-yellow-500');
+            }
+        }
+
+        /**
+         * Main function triggered by the button click on the INPUT tab.
+         * @param {boolean} isHistoryLoad - True if called from history, prevents re-saving.
+         */
+        window.processInputData = function(isHistoryLoad = false) {
+            const rawData = document.getElementById('rallyDataInput').value;
+            const rallyInputView = document.getElementById('rallyInputView');
+            const rallyReportView = document.getElementById('rallyReportView');
+            const statusMessage = document.getElementById('statusMessage');
+
+            if (rawData.trim() === "") {
+                statusMessage.innerHTML = `⚠️ No rally data provided.`;
+                statusMessage.classList.remove('text-green-400');
+                statusMessage.classList.add('text-yellow-500');
+                rallyReportView.classList.add('hidden'); 
+                rallyInputView.classList.remove('hidden');
+                return;
+            }
+            statusMessage.classList.remove('text-yellow-500');
+
+            // 1. Process and generate table
+            const consolidatedData = parseRallyData(rawData);
+            const { totalPasses, totalDivisions } = generateTable(consolidatedData);
+            
+            // 2. Update status and switch to report view
+            statusMessage.innerHTML = `✅ Report generated for ${totalDivisions} divisions. **${totalPasses}** divisions passed the rally requirement.`;
+            statusMessage.classList.add('text-green-400');
+            
+            // Switch views
+            rallyInputView.classList.add('hidden');
+            rallyReportView.classList.remove('hidden');
+
+            // Clear history indicator if processing new data
+            if (!isHistoryLoad) {
+                document.getElementById('historyLoadIndicator').classList.add('hidden');
+            }
+
+            // 3. Save data to history (only if it wasn't loaded from history)
+            // 3. Save data to history (only if it wasn't loaded from history)
+            if (!isHistoryLoad) {
+                // Always attempt to save; saveRallyData will use Firestore when available or fallback to localStorage
+                saveRallyData(rawData, totalPasses, totalDivisions);
+            }
+
+            // Scroll to the results
+            rallyReportView.scrollIntoView({ behavior: 'smooth' });
+        }
+        
+        /**
+         * Helper function to show the input view and clear the report.
+         */
+        window.showInputView = function() {
+            document.getElementById('rallyInputView').classList.remove('hidden');
+            document.getElementById('rallyReportView').classList.add('hidden');
+            document.getElementById('historyLoadIndicator').classList.add('hidden');
+            document.getElementById('rallyDataInput').value = ''; // Optional: clear input on new rally
+        }
+        
+        /**
+         * Custom function to display transient messages (replacing alert).
+         */
+        function showCustomMessage(title, message, bgColorClass = 'bg-blue-500') {
+            const tempModal = document.getElementById('tempMessageModal');
+            document.getElementById('tempMessageTitle').textContent = title;
+            document.getElementById('tempMessageText').textContent = message;
+            
+            // Ensure classes are properly set
+            const header = document.getElementById('tempMessageHeader');
+            header.className = `p-4 text-white text-lg font-bold rounded-t-xl ${bgColorClass}`;
+            
+            tempModal.classList.remove('hidden');
+            setTimeout(() => {
+                tempModal.classList.add('hidden');
+            }, 3000); // Hide after 3 seconds
+        }
+
+        // --- Initialization ---
+        document.addEventListener('DOMContentLoaded', () => {
+            switchTab('dataAnalyzer'); 
+        });
+
+    </script>
+
+    <div class="max-w-7xl mx-auto">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl sm:text-5xl font-extrabold text-indigo-400">Rally Performance Tracker</h1>
+            <p class="text-gray-400 mt-2">Consolidate rally data and check pass status ($\ge 5$).</p>
+        </header>
+
+        <!-- Tab Navigation -->
+        <div class="flex border-b border-gray-700 mb-6">
+            <button onclick="switchTab('dataAnalyzer')" 
+                    id="tab-dataAnalyzer"
+                    class="tab-active py-2 px-4 text-sm font-medium border-b-2 transition-colors duration-200">
+                Data Analysis
+            </button>
+            <button onclick="switchTab('historyViewer')" 
+                    id="tab-historyViewer"
+                    class="tab-inactive py-2 px-4 text-sm font-medium border-b-2 transition-colors duration-200">
+                Previous Rallies
+            </button>
+        </div>
+
+        <!-- TAB 1: DATA ANALYZER (Input & Report/Edit View) -->
+        <div id="dataAnalyzer" class="tab-content">
+            
+            <!-- 1. Input/Paste View -->
+            <div id="rallyInputView" class="mb-8">
+                <section class="bg-gray-800 p-6 rounded-xl shadow-2xl">
+                    <h2 class="text-xl font-semibold mb-4 text-gray-200">1. Paste Raw Rally Data Here</h2>
+                    <textarea id="rallyDataInput" rows="10" 
+                        placeholder="Paste all standard rally data blocks here. Use 'Division Name (Count)' format. E.g.:&#10;Somalian Cove (16)&#10;Purple Legion (4-7)&#10;Navy Seals (5)"
+                        class="w-full bg-gray-700 text-gray-200 p-4 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 border border-gray-600 resize-none"></textarea>
+                    
+                    <button onclick="processInputData()"
+                        class="mt-4 w-full sm:w-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg transition duration-300 shadow-md shadow-indigo-500/50 transform hover:scale-[1.01]">
+                        Process and Generate Report
+                    </button>
+                </section>
+            </div>
+            
+            <!-- 2. Report/Edit View (Initially hidden) -->
+            <div id="rallyReportView" class="hidden mb-8">
+
+                <!-- History Load Indicator and Back Button -->
+                <div id="historyLoadIndicator" class="hidden mb-4 p-3 bg-indigo-800/50 rounded-lg flex flex-col sm:flex-row justify-between items-center transition duration-300">
+                    <span class="text-indigo-200 font-medium text-sm sm:text-base mb-2 sm:mb-0" id="historyLoadText">Data loaded from history.</span>
+                    <button onclick="switchTab('historyViewer')" class="w-full sm:w-auto px-4 py-2 bg-indigo-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-lg transition duration-200 shadow-md">
+                        ← Go Back to History
+                    </button>
+                </div>
+
+                <section class="bg-gray-800 p-6 rounded-xl shadow-2xl">
+                    <div class="flex justify-between items-start mb-4">
+                        <h2 class="text-xl font-semibold text-gray-200">Consolidated Rally Report (Editable)</h2>
+                        <button onclick="showInputView()"
+                                class="px-3 py-1 bg-gray-600 hover:bg-gray-700 text-white text-sm font-semibold rounded-lg transition duration-200">
+                            Start New Rally
+                        </button>
+                    </div>
+
+                    <p id="statusMessage" class="mb-4 text-green-400"></p>
+                    <div class="overflow-x-auto rounded-lg border border-gray-700 shadow-xl">
+                        <table id="resultsTable" class="min-w-full divide-y divide-gray-700">
+                            <!-- Table content will be injected here -->
+                        </table>
+                    </div>
+                    
+                    <button onclick="saveEditedReport()"
+                        class="mt-6 w-full sm:w-auto px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition duration-300 shadow-md shadow-green-500/50 transform hover:scale-[1.01]">
+                        Save Edits as New Rally
+                    </button>
+                </section>
+            </div>
+        </div>
+
+        <!-- TAB 2: HISTORY VIEWER -->
+        <div id="historyViewer" class="tab-content hidden">
+            <section class="bg-gray-800 p-6 rounded-xl shadow-2xl mb-8">
+                <h2 class="text-xl font-semibold mb-4 text-gray-200">Rally History Log</h2>
+                <p class="text-gray-400 mb-4">Click any entry to reload the full data and report.</p>
+                <div id="historyList" class="space-y-3 max-h-96 overflow-y-auto pr-2">
+                    <!-- History entries will be injected here by JavaScript -->
+                    <p class="text-gray-400 text-center py-4">Loading history...</p>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Confirmation Modal (for delete function) -->
+    <div id="confirmModal" class="hidden fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50">
+        <div class="bg-gray-800 p-6 rounded-xl shadow-2xl w-full max-w-sm">
+            <h3 class="text-xl font-bold text-red-400 mb-4">Confirm Deletion</h3>
+            <p class="text-gray-300 mb-6">Are you sure you want to permanently delete this rally record? This cannot be undone.</p>
+            <div class="flex justify-end space-x-3">
+                <button onclick="document.getElementById('confirmModal').classList.add('hidden')"
+                        class="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white font-semibold rounded-lg">
+                    Cancel
+                </button>
+                <button id="confirmDeleteButton"
+                        class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg">
+                    Delete
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Temporary Message Modal (replacing standard alerts) -->
+    <div id="tempMessageModal" class="hidden fixed top-4 right-4 z-50">
+        <div class="bg-gray-800 rounded-xl shadow-2xl overflow-hidden transition-opacity duration-300">
+            <div id="tempMessageHeader" class="p-4 text-white text-lg font-bold rounded-t-xl bg-blue-500">
+                <span id="tempMessageTitle">Message</span>
+            </div>
+            <div class="p-4">
+                <p class="text-gray-300 text-sm" id="tempMessageText"></p>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>
