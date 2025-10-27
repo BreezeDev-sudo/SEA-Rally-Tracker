@@ -400,6 +400,12 @@
             if (tabId === 'historyViewer') {
                 rallyReportView.classList.add('hidden');
                 rallyInputView.classList.add('hidden');
+                // Clear any 'viewing from history' indicator when moving to the history tab
+                const historyIndicator = document.getElementById('historyLoadIndicator');
+                if (historyIndicator) historyIndicator.classList.add('hidden');
+                const historyLoadTextEl = document.getElementById('historyLoadText');
+                if (historyLoadTextEl) historyLoadTextEl.textContent = 'Data loaded from history.';
+
                 loadRallyHistory(); // Ensure data is loaded
             } else if (tabId === 'dataAnalyzer') {
                 // If switching to analyzer, show the report if one exists, otherwise show the input box
@@ -614,10 +620,25 @@
          * Helper function to show the input view and clear the report.
          */
         window.showInputView = function() {
-            document.getElementById('rallyInputView').classList.remove('hidden');
-            document.getElementById('rallyReportView').classList.add('hidden');
-            document.getElementById('historyLoadIndicator').classList.add('hidden');
-            document.getElementById('rallyDataInput').value = ''; // Optional: clear input on new rally
+            const rallyInputView = document.getElementById('rallyInputView');
+            const rallyReportView = document.getElementById('rallyReportView');
+            rallyInputView.classList.remove('hidden');
+            rallyReportView.classList.add('hidden');
+
+            // Hide any history indicator
+            const historyIndicator = document.getElementById('historyLoadIndicator');
+            if (historyIndicator) historyIndicator.classList.add('hidden');
+
+            // Clear the results table so the UI stays on the input view until user processes again
+            const resultsTable = document.getElementById('resultsTable');
+            if (resultsTable) {
+                resultsTable.innerHTML = '';
+            }
+
+            // Clear status and input so user starts fresh
+            const statusMessage = document.getElementById('statusMessage');
+            if (statusMessage) statusMessage.textContent = '';
+            document.getElementById('rallyDataInput').value = '';
         }
         
         /**
