@@ -239,10 +239,11 @@
         async function saveRallyData(rawData, totalPasses, totalDivisions) {
             // If Firestore is available and auth ready, save there.
             if (isAuthReady && db) {
-                const rallyCollection = getRallyCollection();
+                // Prefer per-user collection when available, otherwise fall back to a public collection
+                let rallyCollection = getRallyCollection();
                 if (!rallyCollection) {
-                    console.warn('Rally collection not available; skipping Firestore save.');
-                    return;
+                    console.warn('User-specific rally collection not available; using public collection.');
+                    rallyCollection = collection(db, `artifacts/${appId}/rally_history_public`);
                 }
                 try {
                     await addDoc(rallyCollection, {
@@ -285,13 +286,14 @@
          */
         function loadRallyHistory() {
             const historyList = document.getElementById('historyList');
-
             // If Firestore is configured and auth ready, use real-time listener
             if (isAuthReady && db) {
-                const rallyCollection = getRallyCollection();
+                // Try user-specific collection first; if unavailable, use a public collection so history is visible without per-user auth
+                let rallyCollection = getRallyCollection();
+                let usedPublic = false;
                 if (!rallyCollection) {
-                    historyList.innerHTML = '<p class="text-yellow-400">Waiting for user authentication to load history...</p>';
-                    return;
+                    rallyCollection = collection(db, `artifacts/${appId}/rally_history_public`);
+                    usedPublic = true;
                 }
 
                 const q = query(rallyCollection);
@@ -301,8 +303,8 @@
 
                     // Sort documents by timestamp descending (newest first)
                     documents.sort((a, b) => {
-                        const timeA = a.data.timestamp && a.data.timestamp.toDate ? a.data.timestamp.toDate().getTime() : 0;
-                        const timeB = b.data.timestamp && b.data.timestamp.toDate ? b.data.timestamp.toDate().getTime() : 0;
+                        const timeA = a.data.timestamp && a.data.timestamp.toDate ? a.data.timestamp.toDate().getTime() : (a.data.timestamp || 0);
+                        const timeB = b.data.timestamp && b.data.timestamp.toDate ? b.data.timestamp.toDate().getTime() : (b.data.timestamp || 0);
                         return timeB - timeA;
                     });
 
@@ -310,7 +312,7 @@
                         historyHTML = '<p class="text-gray-400 text-center py-4">No previous rally data found. Process a rally to save history!</p>';
                     } else {
                         documents.forEach(({ id: docId, data }) => {
-                            const date = data.timestamp && data.timestamp.toDate ? data.timestamp.toDate().toLocaleString() : 'Date Unavailable';
+                            const date = data.timestamp && data.timestamp.toDate ? data.timestamp.toDate().toLocaleString() : (data.timestamp ? new Date(data.timestamp).toLocaleString() : 'Date Unavailable');
                             historyHTML += `
                                 <div id="rally-item-${docId}" class="bg-gray-700 p-4 rounded-lg flex justify-between items-center transition duration-200 hover:bg-gray-600 mb-2">
                                     <div class="cursor-pointer" onclick="window.showRallyDetails('${docId}')">
@@ -325,6 +327,9 @@
                             `;
                             document.getElementById('rallyDataInput').setAttribute(`data-rally-${docId}`, data.rawData);
                         });
+                    }
+                    if (usedPublic) {
+                        historyHTML = '<p class="text-yellow-400 text-center py-2">Showing public history (no user authentication)</p>' + historyHTML;
                     }
                     historyList.innerHTML = historyHTML;
                 }, (error) => {
@@ -408,21 +413,35 @@
          * Deletes a record from Firestore.
          */
         async function deleteRallyData(docId) {
-            // If Firestore available, delete from there
+            // If Firestore available, attempt to delete from both user-specific and public collections
             if (isAuthReady && db) {
-                const rallyCollection = getRallyCollection();
-                if (!rallyCollection) return;
+                const userCollection = getRallyCollection();
+                const publicCollection = collection(db, `artifacts/${appId}/rally_history_public`);
+                let deleted = false;
+                if (userCollection) {
+                    try {
+                        await deleteDoc(doc(userCollection, docId));
+                        console.log("Rally data deleted from user collection:", docId);
+                        deleted = true;
+                    } catch (e) {
+                        // ignore and try public
+                        console.warn('Delete from user collection failed:', e);
+                    }
+                }
                 try {
-                    await deleteDoc(doc(rallyCollection, docId));
-                    console.log("Rally data deleted successfully:", docId);
-                    // UI will update via onSnapshot
-                    return;
+                    await deleteDoc(doc(publicCollection, docId));
+                    console.log("Rally data deleted from public collection:", docId);
+                    deleted = true;
                 } catch (e) {
-                    console.error("Error deleting rally data:", e);
-                    const historyList = document.getElementById('historyList');
-                    historyList.innerHTML += `<p class="text-red-400">Failed to delete ${docId}.</p>`;
+                    console.warn('Delete from public collection failed:', e);
+                }
+
+                if (deleted) {
+                    // UI will update via onSnapshot listeners
                     return;
                 }
+
+                // If not deleted above, fall through to attempt localStorage removal
             }
 
             // Otherwise delete from localStorage
