@@ -296,46 +296,37 @@
                     usedPublic = true;
                 }
 
-                const q = query(rallyCollection);
-                onSnapshot(q, (snapshot) => {
-                    let historyHTML = '';
-                    const documents = snapshot.docs.map(doc => ({ id: doc.id, data: doc.data() }));
+                // Unsubscribe any previous listeners
+                historyUnsubscribers.forEach(u => { try { u(); } catch (e) {} });
+                historyUnsubscribers = [];
 
-                    // Sort documents by timestamp descending (newest first)
-                    documents.sort((a, b) => {
-                        const timeA = a.data.timestamp && a.data.timestamp.toDate ? a.data.timestamp.toDate().getTime() : (a.data.timestamp || 0);
-                        const timeB = b.data.timestamp && b.data.timestamp.toDate ? b.data.timestamp.toDate().getTime() : (b.data.timestamp || 0);
-                        return timeB - timeA;
+                const docsMap = new Map();
+                let publicActive = false;
+
+                // user-specific listener
+                if (getRallyCollection()) {
+                    const userQ = query(getRallyCollection());
+                    const unsubUser = onSnapshot(userQ, (snapshot) => {
+                        snapshot.docs.forEach(d => docsMap.set(d.id, { id: d.id, data: d.data() }));
+                        renderMergedHistory(docsMap, !userId); // show public note if no userId
+                    }, (error) => {
+                        console.error('Error loading user rally history:', error);
                     });
+                    historyUnsubscribers.push(unsubUser);
+                }
 
-                    if (documents.length === 0) {
-                        historyHTML = '<p class="text-gray-400 text-center py-4">No previous rally data found. Process a rally to save history!</p>';
-                    } else {
-                        documents.forEach(({ id: docId, data }) => {
-                            const date = data.timestamp && data.timestamp.toDate ? data.timestamp.toDate().toLocaleString() : (data.timestamp ? new Date(data.timestamp).toLocaleString() : 'Date Unavailable');
-                            historyHTML += `
-                                <div id="rally-item-${docId}" class="bg-gray-700 p-4 rounded-lg flex justify-between items-center transition duration-200 hover:bg-gray-600 mb-2">
-                                    <div class="cursor-pointer" onclick="window.showRallyDetails('${docId}')">
-                                        <p class="font-bold text-lg text-indigo-300">${date}</p>
-                                        <p class="text-sm text-gray-400">Passed: ${data.summary.totalPasses} / ${data.summary.totalDivisions}</p>
-                                    </div>
-                                    <div class="flex space-x-2">
-                                        <button onclick="window.showRallyDetails('${docId}')" class="bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-semibold py-1 px-3 rounded-full">View</button>
-                                        <button onclick="window.confirmDelete('${docId}')" class="bg-red-500 hover:bg-red-600 text-white text-xs font-semibold py-1 px-3 rounded-full">Delete</button>
-                                    </div>
-                                </div>
-                            `;
-                            document.getElementById('rallyDataInput').setAttribute(`data-rally-${docId}`, data.rawData);
-                        });
-                    }
-                    if (usedPublic) {
-                        historyHTML = '<p class="text-yellow-400 text-center py-2">Showing public history (no user authentication)</p>' + historyHTML;
-                    }
-                    historyList.innerHTML = historyHTML;
+                // public listener (always try)
+                const publicColl = collection(db, `artifacts/${appId}/rally_history_public`);
+                const publicQ = query(publicColl);
+                const unsubPublic = onSnapshot(publicQ, (snapshot) => {
+                    publicActive = true;
+                    snapshot.docs.forEach(d => docsMap.set(d.id, { id: d.id, data: d.data() }));
+                    renderMergedHistory(docsMap, !userId);
                 }, (error) => {
-                    console.error("Error loading rally history:", error);
+                    console.error('Error loading public rally history:', error);
                     historyList.innerHTML = `<p class="text-red-400">Error loading history: ${error.message}</p>`;
                 });
+                historyUnsubscribers.push(unsubPublic);
                 return;
             }
 
@@ -374,6 +365,52 @@
                 console.error('Error loading local history:', e);
                 historyList.innerHTML = `<p class="text-red-400">Error loading local history.</p>`;
             }
+        }
+
+        // Keep track of active Firestore listeners so we can unsubscribe when reloading
+        let historyUnsubscribers = [];
+
+        /**
+         * Helper to render merged Firestore documents (user + public) into the history list.
+         */
+        function renderMergedHistory(docsMap, showPublicNote) {
+            const historyList = document.getElementById('historyList');
+            const docs = Array.from(docsMap.values());
+            // Sort by timestamp desc
+            docs.sort((a, b) => {
+                const ta = a.data.timestamp && a.data.timestamp.toDate ? a.data.timestamp.toDate().getTime() : (a.data.timestamp || 0);
+                const tb = b.data.timestamp && b.data.timestamp.toDate ? b.data.timestamp.toDate().getTime() : (b.data.timestamp || 0);
+                return tb - ta;
+            });
+
+            if (docs.length === 0) {
+                historyList.innerHTML = '<p class="text-gray-400 text-center py-4">No previous rally data found. Process a rally to save history!</p>';
+                return;
+            }
+
+            let historyHTML = '';
+            if (showPublicNote) {
+                historyHTML += '<p class="text-yellow-400 text-center py-2">Showing public history (no user authentication)</p>';
+            }
+
+            docs.forEach(({ id: docId, data }) => {
+                const date = data.timestamp && data.timestamp.toDate ? data.timestamp.toDate().toLocaleString() : (data.timestamp ? new Date(data.timestamp).toLocaleString() : 'Date Unavailable');
+                historyHTML += `
+                    <div id="rally-item-${docId}" class="bg-gray-700 p-4 rounded-lg flex justify-between items-center transition duration-200 hover:bg-gray-600 mb-2">
+                        <div class="cursor-pointer" onclick="window.showRallyDetails('${docId}')">
+                            <p class="font-bold text-lg text-indigo-300">${date}</p>
+                            <p class="text-sm text-gray-400">Passed: ${data.summary.totalPasses} / ${data.summary.totalDivisions}</p>
+                        </div>
+                        <div class="flex space-x-2">
+                            <button onclick="window.showRallyDetails('${docId}')" class="bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-semibold py-1 px-3 rounded-full">View</button>
+                            <button onclick="window.confirmDelete('${docId}')" class="bg-red-500 hover:bg-red-600 text-white text-xs font-semibold py-1 px-3 rounded-full">Delete</button>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('rallyDataInput').setAttribute(`data-rally-${docId}`, data.rawData);
+            });
+
+            historyList.innerHTML = historyHTML;
         }
         
         /**
