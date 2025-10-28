@@ -112,7 +112,8 @@
                 try { sessionStorage.setItem('isAdmin', '1'); } catch (e) { /* ignore */ }
                 isAdmin = true;
                 msg.textContent = 'Logged in as ADMIN.';
-                setTimeout(() => { msg.textContent = ''; closeLoginModal(); checkAdminAccess(); }, 800);
+                closeLoginModal();
+                checkAdminAccess();
             } else {
                 msg.textContent = 'Invalid credentials.';
             }
