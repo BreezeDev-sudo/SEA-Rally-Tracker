@@ -69,25 +69,63 @@
                 app = initializeApp(configObj);
                 db = getFirestore(app);
                 auth = getAuth(app);
-
-                // Handle Authentication
-                onAuthStateChanged(auth, async (user) => {
-                    if (user) {
-                        userId = user.uid;
-                    } else if (authToken) {
-                        await signInWithCustomToken(auth, authToken).catch(e => console.error('Firebase Custom Auth Error:', e));
-                        userId = auth.currentUser ? auth.currentUser.uid : null;
-                    } else {
-                        await signInAnonymously(auth).catch(e => console.error('Firebase Anonymous Auth Error:', e));
-                        userId = auth.currentUser ? auth.currentUser.uid : null; // Get the generated anonymous UID
-                    }
-                    isAuthReady = true;
-                    console.log('Firebase Auth Ready. User ID:', userId);
-                    loadRallyHistory(); // Start loading history once auth is complete
-                    updateStorageBadge();
+                
+                // Wait for initial auth state
+                await new Promise((resolve) => {
+                    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+                        unsubscribe(); // Stop listening once we get the first state
+                        
+                        if (user) {
+                            // Already have a user (e.g., from a previous session)
+                            userId = user.uid;
+                        } else {
+                            try {
+                                // Try auth methods in order: custom token → anonymous
+                                if (authToken) {
+                                    const userCred = await signInWithCustomToken(auth, authToken);
+                                    userId = userCred.user.uid;
+                                } else {
+                                    // Try anonymous auth
+                                    const userCred = await signInAnonymously(auth);
+                                    userId = userCred.user.uid;
+                                }
+                            } catch (authError) {
+                                console.error('Firebase Auth Error:', authError);
+                                // Set error UI here if needed
+                            }
+                        }
+                        
+                        isAuthReady = true;
+                        console.log('Firebase Auth Ready. User ID:', userId);
+                        
+                        // Verify we can actually access Firestore
+                        try {
+                            const testColl = collection(db, `artifacts/${appId}/rally_history_public`);
+                            await query(testColl).limit(1).get();
+                            console.log('Firestore access verified');
+                        } catch (dbError) {
+                            console.error('Firestore access error:', dbError);
+                            const msg = document.getElementById('cloudSettingsMessage');
+                            if (msg) msg.innerHTML = `
+                                <div class="text-red-400">
+                                    Error accessing Firestore. Please verify:
+                                    <ul class="list-disc pl-4 mt-2 text-sm">
+                                        <li>Anonymous auth is enabled in Firebase Console</li>
+                                        <li>Firestore rules allow read/write</li>
+                                    </ul>
+                                </div>
+                            `;
+                        }
+                        
+                        loadRallyHistory(); // Start loading history once auth is complete
+                        updateStorageBadge();
+                        resolve();
+                    });
                 });
             } catch (e) {
                 console.error('Firebase Initialization Error:', e);
+                isAuthReady = true; // Allow local mode
+                updateStorageBadge();
             }
         }
 
