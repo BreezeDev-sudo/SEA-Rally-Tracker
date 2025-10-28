@@ -41,7 +41,15 @@
         
     // --- GLOBAL VARIABLES FROM ENVIRONMENT ---
     // Allow runtime configuration by using let so we can enable cloud sync later via UI
-    let firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        let firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "AIzaSyAHR-9W__rvFb_M1e-nwOfDsR-4I88TdlA",
+            authDomain: "sea-rally-tracker-1aded.firebaseapp.com",
+            projectId: "sea-rally-tracker-1aded",
+            storageBucket: "sea-rally-tracker-1aded.firebasestorage.app",
+            messagingSenderId: "853879662860",
+            appId: "1:853879662860:web:6cde9ea130dfd9d0770129",
+            measurementId: "G-V6Q25Y8WHP"
+        };
     let initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
     const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         
