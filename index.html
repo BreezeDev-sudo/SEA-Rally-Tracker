@@ -153,6 +153,31 @@
             return `rally_history_local_${appId}`;
         }
 
+        // Draft key for in-progress input so refresh doesn't lose pasted data
+        function getDraftKey() {
+            return `rally_draft_${appId}`;
+        }
+
+        function saveDraft(rawText) {
+            try {
+                localStorage.setItem(getDraftKey(), rawText || '');
+            } catch (e) {
+                console.warn('Failed to save draft:', e);
+            }
+        }
+
+        function loadDraft() {
+            try {
+                return localStorage.getItem(getDraftKey()) || '';
+            } catch (e) {
+                return '';
+            }
+        }
+
+        function clearDraft() {
+            try { localStorage.removeItem(getDraftKey()); } catch (e) {}
+        }
+
         // UI helpers for Cloud Settings modal
         window.openCloudSettings = function() {
             document.getElementById('cloudSettingsModal').classList.remove('hidden');
@@ -746,6 +771,8 @@
          */
         window.processInputData = function(isHistoryLoad = false) {
             const rawData = document.getElementById('rallyDataInput').value;
+            // Save a draft immediately so refresh won't lose pasted data
+            saveDraft(rawData);
             const rallyInputView = document.getElementById('rallyInputView');
             const rallyReportView = document.getElementById('rallyReportView');
             const statusMessage = document.getElementById('statusMessage');
@@ -782,6 +809,8 @@
             if (!isHistoryLoad) {
                 // Always attempt to save; saveRallyData will use Firestore when available or fallback to localStorage
                 saveRallyData(rawData, totalPasses, totalDivisions);
+                // Clear draft once we've kicked off a save (so refresh won't re-run processing)
+                clearDraft();
             }
 
             // Scroll to the results
@@ -834,9 +863,17 @@
         // --- Initialization ---
         document.addEventListener('DOMContentLoaded', () => {
             switchTab('dataAnalyzer'); 
-            // Ensure admin UI state is correct
-            checkAdminAccess();
-            updateStorageBadge();
+                // Ensure admin UI state is correct
+                try { if (typeof checkAdminAccess === 'function') checkAdminAccess(); } catch (e) {}
+                updateStorageBadge();
+
+                // Restore draft content into the input area so refresh doesn't lose data
+                try {
+                    const draft = loadDraft();
+                    if (draft && document.getElementById('rallyDataInput')) {
+                        document.getElementById('rallyDataInput').value = draft;
+                    }
+                } catch (e) { /* ignore */ }
         });
 
     </script>
@@ -876,6 +913,20 @@
                     <textarea id="rallyDataInput" rows="10" 
                         placeholder="Paste all standard rally data blocks here. Use 'Division Name (Count)' format. E.g.:&#10;Somalian Cove (16)&#10;Purple Legion (4-7)&#10;Navy Seals (5)"
                         class="w-full bg-gray-700 text-gray-200 p-4 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 border border-gray-600 resize-none"></textarea>
+                    <script>
+                        // Auto-save draft while typing (debounced)
+                        (function(){
+                            const ta = document.getElementById('rallyDataInput');
+                            if (!ta) return;
+                            let tmr = null;
+                            ta.addEventListener('input', () => {
+                                if (tmr) clearTimeout(tmr);
+                                tmr = setTimeout(() => {
+                                    try { saveDraft(ta.value); } catch (e) {}
+                                }, 300);
+                            });
+                        })();
+                    </script>
                     
                     <button onclick="processInputData()"
                         class="mt-4 w-full sm:w-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg transition duration-300 shadow-md shadow-indigo-500/50 transform hover:scale-[1.01]">
