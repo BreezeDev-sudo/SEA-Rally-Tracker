@@ -178,12 +178,13 @@
         // --- FIREBASE HISTORY LOGIC ---
 
         /**
-         * Gets the Firestore collection path for the user's rally history.
-         * Path: /artifacts/{appId}/users/{userId}/rally_history
+         * Gets the Firestore collection path for rally history.
+         * Path: /artifacts/{appId}/rally_history_public
          */
         function getRallyCollection() {
             if (!db || !userId) return null;
-            return collection(db, `artifacts/${appId}/users/${userId}/rally_history`);
+            // Using the public collection as defined in the Firebase rules
+            return collection(db, `artifacts/${appId}/rally_history_public`);
         }
 
         // LocalStorage fallback key (used when Firebase is not configured)
@@ -301,27 +302,37 @@
          */
         async function saveRallyData(rawData, totalPasses, totalDivisions) {
             // If Firestore is available and auth ready, save there.
-            if (isAuthReady && db) {
-                // Prefer per-user collection when available, otherwise fall back to a public collection
-                let rallyCollection = getRallyCollection();
-                if (!rallyCollection) {
-                    console.warn('User-specific rally collection not available; using public collection.');
-                    rallyCollection = collection(db, `artifacts/${appId}/rally_history_public`);
-                }
+            if (isAuthReady && db && userId) {
+                const rallyCollection = getRallyCollection();
                 try {
-                    await addDoc(rallyCollection, {
+                    const docData = {
                         timestamp: new Date(),
                         rawData: rawData,
                         summary: {
                             totalPasses: totalPasses,
                             totalDivisions: totalDivisions,
-                        }
-                    });
+                        },
+                        userId: userId // Add userId to document for filtering
+                    };
+                    
+                    await addDoc(rallyCollection, docData);
                     console.log("Rally data saved to Firestore successfully.");
+                    return; // Successfully saved to Firestore
                 } catch (e) {
                     console.error("Error saving rally data to Firestore:", e);
+                    const errorMessage = e.message || 'Unknown error';
+                    // Show error in UI if possible
+                    const msg = document.getElementById('cloudSettingsMessage');
+                    if (msg) {
+                        msg.innerHTML = `
+                            <div class="text-red-400">
+                                Error saving to Firestore: ${errorMessage}
+                                <br>
+                                Falling back to local storage...
+                            </div>
+                        `;
+                    }
                 }
-                return;
             }
 
             // LocalStorage fallback when Firestore isn't configured
